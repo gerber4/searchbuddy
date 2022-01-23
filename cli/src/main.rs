@@ -4,6 +4,11 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::ClearType;
 use crossterm::{execute, queue};
 use futures::{Sink, SinkExt, StreamExt};
+use log::{error, LevelFilter};
+use log4rs::append::file::FileAppender;
+use log4rs::config::{Appender, Root};
+use log4rs::encode::pattern::PatternEncoder;
+use log4rs::Config;
 use shared::{Chat, Chatroom, ClientToServerMessage, ServerToClientMessage};
 use std::error::Error;
 use std::io::{stdout, Write};
@@ -156,6 +161,10 @@ async fn update(model: &mut Model, event: Event) {
                                 };
                             }
                             Err(error) => {
+                                error!(
+                                    "An error occurred while accessing the server = {:?}",
+                                    error
+                                );
                                 model.state = State::Error {
                                     error: Box::new(error),
                                 };
@@ -174,86 +183,98 @@ async fn update(model: &mut Model, event: Event) {
             },
             _ => {}
         },
-        State::SelectChatroom { chatrooms, index } => match event {
-            Event::Keyboard(key_event) => match key_event.code {
-                KeyCode::Esc => {
-                    model.state = State::Initial {
-                        search: "".to_string(),
+        State::SelectChatroom { chatrooms, index } => {
+            match event {
+                Event::Keyboard(key_event) => match key_event.code {
+                    KeyCode::Esc => {
+                        model.state = State::Initial {
+                            search: "".to_string(),
+                        }
                     }
-                }
-                KeyCode::Up => {
-                    *index = *index - 1;
-                }
-                KeyCode::Down => {
-                    *index = *index + 1;
-                }
-                KeyCode::Enter => {
-                    let index = index.rem_euclid(chatrooms.len() as isize) as usize;
-                    let chatroom = &chatrooms[index];
-                    println!("{}", chatroom.url);
+                    KeyCode::Up => {
+                        *index = *index - 1;
+                    }
+                    KeyCode::Down => {
+                        *index = *index + 1;
+                    }
+                    KeyCode::Enter => {
+                        let index = index.rem_euclid(chatrooms.len() as isize) as usize;
+                        let chatroom = &chatrooms[index];
 
-                    let (socket, _response) = tokio_tungstenite::connect_async(&chatroom.url)
-                        .await
-                        .expect("Failed to connect to chatroom server.");
-                    let (mut send, mut receive) = socket.split();
+                        let result: Result<(), Box<dyn Error + Sync + Send>> = try {
+                            let (socket, _response) =
+                                tokio_tungstenite::connect_async(&chatroom.url).await?;
 
-                    let message = serde_json::to_string(&ClientToServerMessage::Join {
-                        channel_id: chatroom.chatroom_id,
-                    })
-                    .unwrap();
-                    send.send(Message::Text(message))
-                        .await
-                        .expect("Failed to send message.");
+                            let (mut send, mut receive) = socket.split();
 
-                    let channel = model.event_sender.clone();
+                            let message = serde_json::to_string(&ClientToServerMessage::Join {
+                                channel_id: chatroom.chatroom_id,
+                            })?;
 
-                    tokio::spawn(async move {
-                        while let Some(message) = receive.next().await {
-                            match message {
-                                Ok(message) => {
-                                    if let Message::Text(message) = message {
-                                        let message =
-                                            serde_json::from_str::<ServerToClientMessage>(&message)
-                                                .expect("Server send invalid message.");
+                            send.send(Message::Text(message)).await?;
 
+                            let channel = model.event_sender.clone();
+
+                            tokio::spawn(async move {
+                                let result: Result<(), Box<dyn Error + Sync + Send>> = try {
+                                    while let Some(message) = receive.next().await {
                                         match message {
-                                            ServerToClientMessage::Joined { .. } => {
-                                                channel.send(Event::Joined).unwrap();
+                                            Ok(message) => {
+                                                if let Message::Text(message) = message {
+                                                    let message = serde_json::from_str::<
+                                                        ServerToClientMessage,
+                                                    >(
+                                                        &message
+                                                    )?;
+
+                                                    match message {
+                                                            ServerToClientMessage::Joined { .. } => {
+                                                                channel.send(Event::Joined)?;
+                                                            }
+                                                            ServerToClientMessage::NewUser { user_id } => {
+                                                                channel.send(Event::NewUser { user_id })?;
+                                                            }
+                                                            ServerToClientMessage::UserDisconnected { user_id } => {
+                                                                channel
+                                                                    .send(Event::UserDisconnected { user_id })?;
+                                                            }
+                                                            ServerToClientMessage::NewMessage(chat) => {
+                                                                channel.send(Event::NewMessage(chat))?;
+                                                            }
+                                                            ServerToClientMessage::RangeResponse { .. } => {}
+                                                        }
+                                                }
                                             }
-                                            ServerToClientMessage::NewUser { user_id } => {
-                                                channel.send(Event::NewUser { user_id }).unwrap();
+                                            Err(error) => {
+                                                error!("An error occurred while processing messages from chatroom instance - {:?}", error);
+                                                channel.send(Event::Disconnect)?;
                                             }
-                                            ServerToClientMessage::UserDisconnected { user_id } => {
-                                                channel
-                                                    .send(Event::UserDisconnected { user_id })
-                                                    .unwrap();
-                                            }
-                                            ServerToClientMessage::NewMessage(chat) => {
-                                                channel.send(Event::NewMessage(chat)).unwrap();
-                                            }
-                                            ServerToClientMessage::RangeResponse { .. } => {}
                                         }
                                     }
-                                }
-                                Err(_error) => {
-                                    channel
-                                        .send(Event::Disconnect)
-                                        .expect("Failed to send disconnect event.");
-                                }
-                            }
-                        }
-                    });
+                                };
 
-                    model.state = State::InChatroom {
-                        sink: Box::pin(send),
-                        messages: Vec::new(),
-                        input: "".to_string(),
-                    };
-                }
+                                if let Err(error) = result {
+                                    error!("An error occurred while processing messages from chatroom instance - {:?}", error);
+                                }
+                            });
+
+                            model.state = State::InChatroom {
+                                sink: Box::pin(send),
+                                messages: Vec::new(),
+                                input: "".to_string(),
+                            };
+                        };
+
+                        if let Err(error) = result {
+                            error!("An error occurred while connecting to the provided chatroom instance.");
+                            model.state = State::Error { error };
+                        }
+                    }
+                    _ => {}
+                },
                 _ => {}
-            },
-            _ => {}
-        },
+            }
+        }
         State::InChatroom {
             sink,
             messages,
@@ -272,10 +293,18 @@ async fn update(model: &mut Model, event: Event) {
                                 idempotency: "ligma".to_string(),
                             }))
                             .unwrap();
-                        sink.send(Message::Text(message))
-                            .await
-                            .expect("Failed to send message.");
-                        input.clear();
+                        let result = sink.send(Message::Text(message)).await;
+                        match result {
+                            Ok(()) => {
+                                input.clear();
+                            }
+                            Err(error) => {
+                                error!("An error occurred while sending a message - {:?}", error);
+                                model.state = State::Error {
+                                    error: Box::new(error),
+                                };
+                            }
+                        }
                     }
                 }
                 KeyCode::Char(char) => {
@@ -317,16 +346,25 @@ async fn update(model: &mut Model, event: Event) {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let logfile = FileAppender::builder()
+        .encoder(Box::new(PatternEncoder::new("{l} - {m}\n")))
+        .build("log/output.log")?;
+
+    let config = Config::builder()
+        .appender(Appender::builder().build("logfile", Box::new(logfile)))
+        .build(Root::builder().appender("logfile").build(LevelFilter::Info))?;
+
+    log4rs::init_config(config)?;
+
+    let runtime = Runtime::new()?;
+
     let mut stdout = stdout();
     execute!(stdout, crossterm::terminal::EnterAlternateScreen)?;
     execute!(stdout, crossterm::cursor::Hide)?;
     crossterm::terminal::enable_raw_mode()?;
 
     let (send, mut receive) = unbounded_channel::<Event>();
-
     let send_clone = send.clone();
-
-    let runtime = Runtime::new()?;
 
     let handle = runtime.spawn(async move {
         let mut model = Model {
@@ -336,7 +374,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             },
         };
 
-        view(&model).expect("Failed to draw to terminal.");
+        {
+            let result = view(&model);
+            if result.is_err() {
+                error!("Failed to draw to terminal on startup.");
+                return;
+            }
+        }
 
         while let Some(event) = receive.recv().await {
             update(&mut model, event).await;
@@ -345,22 +389,29 @@ fn main() -> Result<(), Box<dyn Error>> {
                 break;
             }
 
-            view(&model).expect("Failed to draw to terminal.");
+            let result = view(&model);
+            if result.is_err() {
+                error!("Failed to draw to terminal after startup.");
+                return;
+            }
         }
     });
 
-    thread::spawn(move || loop {
-        match crossterm::event::read().expect("Failed to read event from channel.") {
-            crossterm::event::Event::Key(event) => send
-                .send(Event::Keyboard(event))
-                .expect("Failed to send event."),
-            _ => {}
+    thread::spawn(move || {
+        while let Ok(crossterm::event::Event::Key(event)) = crossterm::event::read() {
+            let result = send.send(Event::Keyboard(event));
+
+            if result.is_err() {
+                error!("Failed to send keyboard event.");
+            }
         }
     });
 
-    runtime
-        .block_on(handle)
-        .expect("Main future failed to run to completion.");
+    let result = runtime.block_on(handle);
+
+    if result.is_err() {
+        error!("Main future failed to run to completion.");
+    }
 
     crossterm::terminal::disable_raw_mode()?;
     execute!(stdout, crossterm::terminal::LeaveAlternateScreen)?;

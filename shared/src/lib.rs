@@ -12,7 +12,7 @@ pub enum ClientToServerMessage {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum ServerToClientMessage {
-    Joined { channel_id: u32 },
+    Joined { chatroom_id: u32 },
     NewUser { user_id: u32 },
     UserDisconnected { user_id: u32 },
     NewMessage(Chat),
@@ -27,9 +27,10 @@ pub struct Chat {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Chatroom {
-    pub term: String,
     pub chatroom_id: u32,
     pub num_users: u32,
+    pub online: bool,
+    pub term: String,
     pub url: String,
 }
 
