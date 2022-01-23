@@ -4,12 +4,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::ClearType;
 use crossterm::{execute, queue};
 use futures::{Sink, SinkExt, StreamExt};
-use log::{error, LevelFilter};
-use log4rs::append::file::FileAppender;
-use log4rs::config::{Appender, Root};
-use log4rs::encode::pattern::PatternEncoder;
-use log4rs::Config;
-use shared::{Chat, Chatroom, ClientToServerMessage, ServerToClientMessage};
+use log::error;
+use shared::{Chat, Chatroom, ClientToServerMessage, initialize_logger, ServerToClientMessage};
 use std::error::Error;
 use std::io::{stdout, Write};
 use std::pin::Pin;
@@ -145,7 +141,7 @@ async fn update(model: &mut Model, event: Event) {
                         let client = reqwest::Client::new();
                         let chatrooms: Result<Vec<Chatroom>, reqwest::Error> = try {
                             client
-                                .get("http://localhost:8080/chatrooms")
+                                .get("http://searchbuddy.gerber.website:8080/chatrooms")
                                 .query(&[("search", &search)])
                                 .send()
                                 .await?
@@ -290,7 +286,6 @@ async fn update(model: &mut Model, event: Event) {
                         let message =
                             serde_json::to_string(&ClientToServerMessage::NewMessage(Chat {
                                 text: input.clone(),
-                                idempotency: "ligma".to_string(),
                             }))
                             .unwrap();
                         let result = sink.send(Message::Text(message)).await;
@@ -346,15 +341,7 @@ async fn update(model: &mut Model, event: Event) {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let logfile = FileAppender::builder()
-        .encoder(Box::new(PatternEncoder::new("{l} - {m}\n")))
-        .build("log/output.log")?;
-
-    let config = Config::builder()
-        .appender(Appender::builder().build("logfile", Box::new(logfile)))
-        .build(Root::builder().appender("logfile").build(LevelFilter::Info))?;
-
-    log4rs::init_config(config)?;
+    initialize_logger()?;
 
     let runtime = Runtime::new()?;
 

@@ -17,7 +17,7 @@ use axum::{
 };
 use futures::StreamExt;
 use log::error;
-use shared::{get_channel_id, ClientToServerMessage};
+use shared::{get_channel_id, ClientToServerMessage, initialize_logger};
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
@@ -124,7 +124,7 @@ async fn handle_socket_messages(state: Arc<RwLock<State>>, socket: WebSocket) {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    initialize_logger()?;
 
     let runtime = Runtime::new()?;
 

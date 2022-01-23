@@ -3,15 +3,16 @@
 use axum::extract::Query;
 use axum::routing::get;
 use axum::{Json, Router};
-use log::error;
+use log::{error, info};
 use serde::Deserialize;
-use shared::{get_channel_id, Chatroom};
+use shared::{get_channel_id, Chatroom, initialize_logger};
 use std::collections::HashMap;
+use std::env;
 use std::error::Error;
 use tokio::runtime::Runtime;
 use url::Url;
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct ChatroomQuery {
     search: String,
 }
@@ -22,12 +23,17 @@ struct Location {
 }
 
 async fn get_chatrooms(Query(query): Query<ChatroomQuery>) -> Json<Vec<Chatroom>> {
+    info!("GET /chatrooms: {:?}", query);
+
     let terms: Vec<&str> = query.search.split(" ").collect();
 
     // TODO - This is a dumb implementation for the MVP.
-    //  In the future, there will be a service that chatrooms will register themselves with.
-    let urls = vec![Url::parse("http://0.0.0.0:3000").unwrap()];
-
+    //  In the future, there will be a service that chatrooms will register themselves with.\
+    let instances = env::var("CHATROOM_INSTANCES").unwrap();
+    let urls: Vec<Url> = instances
+        .split_whitespace()
+        .map(|url| Url::parse(url).unwrap())
+        .collect();
     let instances = locate_instances(&urls, &terms);
 
     let client = reqwest::Client::new();
@@ -89,7 +95,7 @@ fn locate_instances(urls: &Vec<Url>, terms: &[&str]) -> Vec<Location> {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    initialize_logger()?;
 
     let runtime = Runtime::new()?;
 
