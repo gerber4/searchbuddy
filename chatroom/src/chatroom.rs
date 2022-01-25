@@ -1,37 +1,35 @@
+use crate::model::Model;
 use async_recursion::async_recursion;
 use axum::extract::ws::{Message, WebSocket};
 use futures::stream::SplitSink;
 use futures::SinkExt;
-use log::error;
-use shared::{Chat, ServerToClientMessage};
+use log::{error, info};
+use shared::ServerToClientMessage;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 pub enum ClientToServerEvent {
-    NewMessage(Chat),
-    RangeRequest {
-        limit: usize,
-        offset: usize,
-    },
+    NewMessage(String),
+    ChatsFromTodayRequest,
     Connect {
-        user_id: u32,
+        user_id: i32,
         connection: SplitSink<WebSocket, Message>,
     },
     Disconnect {
-        user_id: u32,
+        user_id: i32,
     },
 }
 
 pub struct Chatroom {
-    chatroom_id: u32,
+    chatroom_id: i32,
     channel: UnboundedSender<ClientToServerEvent>,
     count: AtomicU32,
 }
 
 impl Chatroom {
-    pub fn new(chatroom_id: u32) -> Arc<Chatroom> {
+    pub fn new(model: Arc<Model>, chatroom_id: i32) -> Arc<Chatroom> {
         let (sender, receiver) = unbounded_channel::<ClientToServerEvent>();
 
         let chatroom = Chatroom {
@@ -41,7 +39,7 @@ impl Chatroom {
         };
 
         let chatroom = Arc::new(chatroom);
-        tokio::spawn(Self::handle_events(chatroom.clone(), receiver));
+        tokio::spawn(Self::handle_events(model, chatroom.clone(), receiver));
         chatroom
     }
 
@@ -61,27 +59,43 @@ impl Chatroom {
     }
 
     async fn handle_events(
+        model: Arc<Model>,
         chatroom: Arc<Chatroom>,
         mut receiver: UnboundedReceiver<ClientToServerEvent>,
     ) {
-        let mut connections: HashMap<u32, SplitSink<WebSocket, Message>> = HashMap::new();
-        let mut messages: Vec<Chat> = Vec::new();
+        info!(
+            "Started task to handle events for channel {}.",
+            chatroom.chatroom_id
+        );
+
+        let mut connections: HashMap<i32, SplitSink<WebSocket, Message>> = HashMap::new();
 
         loop {
             while let Some(event) = receiver.recv().await {
                 match event {
                     ClientToServerEvent::NewMessage(chat) => {
-                        messages.push(chat.clone());
+                        let result = model.insert_chat(chatroom.chatroom_id, &chat).await;
+
+                        if let Err(error) = result {
+                            error!("Failed to insert chat to database - {:?}", error);
+                        }
+
                         let message = ServerToClientMessage::NewMessage(chat);
                         Self::broadcast_message(&mut connections, message).await;
                     }
 
-                    ClientToServerEvent::RangeRequest { limit, offset } => {
-                        let slice = &messages[offset..offset + limit];
-                        let message = ServerToClientMessage::RangeResponse {
-                            messages: slice.to_vec(),
-                        };
-                        Self::broadcast_message(&mut connections, message).await;
+                    ClientToServerEvent::ChatsFromTodayRequest => {
+                        let result = model.get_chats_from_today(chatroom.chatroom_id).await;
+                        match result {
+                            Ok(messages) => {
+                                let message =
+                                    ServerToClientMessage::ChatsFromTodayResponse { messages };
+                                Self::broadcast_message(&mut connections, message).await;
+                            }
+                            Err(error) => {
+                                error!("Failed to fetch chats from database - {:?}", error);
+                            }
+                        }
                     }
 
                     ClientToServerEvent::Connect {
@@ -115,10 +129,12 @@ impl Chatroom {
 
     #[async_recursion]
     async fn send_message(
-        connections: &mut HashMap<u32, SplitSink<WebSocket, Message>>,
-        user_id: u32,
+        connections: &mut HashMap<i32, SplitSink<WebSocket, Message>>,
+        user_id: i32,
         message: ServerToClientMessage,
     ) {
+        info!("Sending message to user {} - {:?}", user_id, message);
+
         let message = serde_json::to_string(&message).unwrap();
         let message = Message::Text(message);
 
@@ -138,9 +154,11 @@ impl Chatroom {
 
     #[async_recursion]
     async fn broadcast_message(
-        connections: &mut HashMap<u32, SplitSink<WebSocket, Message>>,
+        connections: &mut HashMap<i32, SplitSink<WebSocket, Message>>,
         message: ServerToClientMessage,
     ) {
+        info!("Broadcasting message - {:?}", message);
+
         let message = serde_json::to_string(&message).unwrap();
         let message = Message::Text(message);
 

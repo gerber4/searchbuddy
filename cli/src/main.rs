@@ -3,25 +3,30 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::ClearType;
 use crossterm::{execute, queue};
-use futures::{Sink, SinkExt, StreamExt};
+use futures::{Sink, SinkExt, Stream, StreamExt};
 use log::error;
-use shared::{Chat, Chatroom, ClientToServerMessage, initialize_logger, ServerToClientMessage};
+use shared::{initialize_logger, Chatroom, ClientToServerMessage, ServerToClientMessage};
 use std::error::Error;
 use std::io::{stdout, Write};
 use std::pin::Pin;
 use std::thread;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::error::Error as WsError;
+use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+type BoxError = Box<dyn Error + Send + Sync>;
+type BoxResult<T> = Result<T, BoxError>;
 
 #[derive(Debug)]
 enum Event {
     Keyboard(KeyEvent),
     Disconnect,
     Joined,
-    NewUser { user_id: u32 },
-    UserDisconnected { user_id: u32 },
-    NewMessage(Chat),
+    NewUser { user_id: i32 },
+    UserDisconnected { user_id: i32 },
+    NewMessage(String),
+    ChatsFromTodayResponse { messages: Vec<String> },
 }
 
 struct Model {
@@ -38,23 +43,17 @@ enum State {
         index: isize,
     },
     InChatroom {
-        sink: Pin<
-            Box<
-                dyn Sink<Message, Error = tokio_tungstenite::tungstenite::error::Error>
-                    + Send
-                    + Sync,
-            >,
-        >,
+        sink: Pin<Box<dyn Sink<WsMessage, Error = WsError> + Send + Sync>>,
         messages: Vec<String>,
         input: String,
     },
     Error {
-        error: Box<dyn Error + Send + Sync>,
+        error: BoxError,
     },
     Break,
 }
 
-fn view(model: &Model) -> Result<(), Box<dyn Error>> {
+fn view(model: &Model) -> BoxResult<()> {
     let (_width, height) = crossterm::terminal::size()?;
 
     let mut stdout = stdout();
@@ -139,7 +138,7 @@ async fn update(model: &mut Model, event: Event) {
                 KeyCode::Enter => {
                     if !search.is_empty() {
                         let client = reqwest::Client::new();
-                        let chatrooms: Result<Vec<Chatroom>, reqwest::Error> = try {
+                        let chatrooms: BoxResult<Vec<Chatroom>> = try {
                             client
                                 .get("http://searchbuddy.gerber.website:8080/chatrooms")
                                 .query(&[("search", &search)])
@@ -161,9 +160,7 @@ async fn update(model: &mut Model, event: Event) {
                                     "An error occurred while accessing the server = {:?}",
                                     error
                                 );
-                                model.state = State::Error {
-                                    error: Box::new(error),
-                                };
+                                model.state = State::Error { error };
                             }
                         }
                     }
@@ -179,98 +176,60 @@ async fn update(model: &mut Model, event: Event) {
             },
             _ => {}
         },
-        State::SelectChatroom { chatrooms, index } => {
-            match event {
-                Event::Keyboard(key_event) => match key_event.code {
-                    KeyCode::Esc => {
-                        model.state = State::Initial {
-                            search: "".to_string(),
-                        }
+        State::SelectChatroom { chatrooms, index } => match event {
+            Event::Keyboard(key_event) => match key_event.code {
+                KeyCode::Esc => {
+                    model.state = State::Initial {
+                        search: "".to_string(),
                     }
-                    KeyCode::Up => {
-                        *index = *index - 1;
-                    }
-                    KeyCode::Down => {
-                        *index = *index + 1;
-                    }
-                    KeyCode::Enter => {
-                        let index = index.rem_euclid(chatrooms.len() as isize) as usize;
-                        let chatroom = &chatrooms[index];
+                }
+                KeyCode::Up => {
+                    *index = *index - 1;
+                }
+                KeyCode::Down => {
+                    *index = *index + 1;
+                }
+                KeyCode::Enter => {
+                    let index = index.rem_euclid(chatrooms.len() as isize) as usize;
+                    let chatroom = &chatrooms[index];
 
-                        let result: Result<(), Box<dyn Error + Sync + Send>> = try {
-                            let (socket, _response) =
-                                tokio_tungstenite::connect_async(&chatroom.url).await?;
+                    let result: BoxResult<()> = try {
+                        let (socket, _response) =
+                            tokio_tungstenite::connect_async(&chatroom.url).await?;
 
-                            let (mut send, mut receive) = socket.split();
+                        let (mut send, receive) = socket.split();
 
-                            let message = serde_json::to_string(&ClientToServerMessage::Join {
-                                channel_id: chatroom.chatroom_id,
-                            })?;
+                        let message = serde_json::to_string(&ClientToServerMessage::Join {
+                            channel_id: chatroom.chatroom_id,
+                        })?;
+                        send.send(WsMessage::Text(message)).await?;
 
-                            send.send(Message::Text(message)).await?;
+                        let message =
+                            serde_json::to_string(&ClientToServerMessage::ChatsFromTodayRequest)?;
+                        send.send(WsMessage::Text(message)).await?;
 
-                            let channel = model.event_sender.clone();
+                        let channel = model.event_sender.clone();
 
-                            tokio::spawn(async move {
-                                let result: Result<(), Box<dyn Error + Sync + Send>> = try {
-                                    while let Some(message) = receive.next().await {
-                                        match message {
-                                            Ok(message) => {
-                                                if let Message::Text(message) = message {
-                                                    let message = serde_json::from_str::<
-                                                        ServerToClientMessage,
-                                                    >(
-                                                        &message
-                                                    )?;
+                        tokio::spawn(handle_messages(channel, Box::pin(receive)));
 
-                                                    match message {
-                                                            ServerToClientMessage::Joined { .. } => {
-                                                                channel.send(Event::Joined)?;
-                                                            }
-                                                            ServerToClientMessage::NewUser { user_id } => {
-                                                                channel.send(Event::NewUser { user_id })?;
-                                                            }
-                                                            ServerToClientMessage::UserDisconnected { user_id } => {
-                                                                channel
-                                                                    .send(Event::UserDisconnected { user_id })?;
-                                                            }
-                                                            ServerToClientMessage::NewMessage(chat) => {
-                                                                channel.send(Event::NewMessage(chat))?;
-                                                            }
-                                                            ServerToClientMessage::RangeResponse { .. } => {}
-                                                        }
-                                                }
-                                            }
-                                            Err(error) => {
-                                                error!("An error occurred while processing messages from chatroom instance - {:?}", error);
-                                                channel.send(Event::Disconnect)?;
-                                            }
-                                        }
-                                    }
-                                };
-
-                                if let Err(error) = result {
-                                    error!("An error occurred while processing messages from chatroom instance - {:?}", error);
-                                }
-                            });
-
-                            model.state = State::InChatroom {
-                                sink: Box::pin(send),
-                                messages: Vec::new(),
-                                input: "".to_string(),
-                            };
+                        model.state = State::InChatroom {
+                            sink: Box::pin(send),
+                            messages: Vec::new(),
+                            input: "".to_string(),
                         };
+                    };
 
-                        if let Err(error) = result {
-                            error!("An error occurred while connecting to the provided chatroom instance.");
-                            model.state = State::Error { error };
-                        }
+                    if let Err(error) = result {
+                        error!(
+                            "An error occurred while connecting to the provided chatroom instance."
+                        );
+                        model.state = State::Error { error };
                     }
-                    _ => {}
-                },
+                }
                 _ => {}
-            }
-        }
+            },
+            _ => {}
+        },
         State::InChatroom {
             sink,
             messages,
@@ -283,12 +242,11 @@ async fn update(model: &mut Model, event: Event) {
                 }
                 KeyCode::Enter => {
                     if !input.is_empty() {
-                        let message =
-                            serde_json::to_string(&ClientToServerMessage::NewMessage(Chat {
-                                text: input.clone(),
-                            }))
-                            .unwrap();
-                        let result = sink.send(Message::Text(message)).await;
+                        let message = serde_json::to_string(&ClientToServerMessage::NewMessage(
+                            input.clone(),
+                        ))
+                        .unwrap();
+                        let result = sink.send(WsMessage::Text(message)).await;
                         match result {
                             Ok(()) => {
                                 input.clear();
@@ -326,7 +284,12 @@ async fn update(model: &mut Model, event: Event) {
                 messages.push(format!("User with id {} left chatroom!", user_id));
             }
             Event::NewMessage(chat) => {
-                messages.push(chat.text);
+                messages.push(chat);
+            }
+            Event::ChatsFromTodayResponse {
+                messages: mut new_messages,
+            } => {
+                messages.append(&mut new_messages);
             }
         },
         State::Error { .. } => match event {
@@ -340,7 +303,56 @@ async fn update(model: &mut Model, event: Event) {
     };
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+async fn handle_messages(
+    channel: UnboundedSender<Event>,
+    mut receive: Pin<Box<impl Stream<Item = Result<WsMessage, WsError>>>>,
+) {
+    let result: BoxResult<()> = try {
+        while let Some(message) = receive.next().await {
+            match message {
+                Ok(message) => {
+                    if let WsMessage::Text(message) = message {
+                        let message = serde_json::from_str::<ServerToClientMessage>(&message)?;
+
+                        match message {
+                            ServerToClientMessage::Joined { .. } => {
+                                channel.send(Event::Joined)?;
+                            }
+                            ServerToClientMessage::NewUser { user_id } => {
+                                channel.send(Event::NewUser { user_id })?;
+                            }
+                            ServerToClientMessage::UserDisconnected { user_id } => {
+                                channel.send(Event::UserDisconnected { user_id })?;
+                            }
+                            ServerToClientMessage::NewMessage(chat) => {
+                                channel.send(Event::NewMessage(chat))?;
+                            }
+                            ServerToClientMessage::ChatsFromTodayResponse { messages } => {
+                                channel.send(Event::ChatsFromTodayResponse { messages })?;
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    error!(
+                        "An error occurred while processing messages from chatroom instance - {:?}",
+                        error
+                    );
+                    channel.send(Event::Disconnect)?;
+                }
+            }
+        }
+    };
+
+    if let Err(error) = result {
+        error!(
+            "An error occurred while processing messages from chatroom instance - {:?}",
+            error
+        );
+    }
+}
+
+fn main() -> BoxResult<()> {
     initialize_logger()?;
 
     let runtime = Runtime::new()?;

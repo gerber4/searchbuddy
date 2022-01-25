@@ -5,12 +5,15 @@ use axum::routing::get;
 use axum::{Json, Router};
 use log::{error, info};
 use serde::Deserialize;
-use shared::{get_channel_id, Chatroom, initialize_logger};
+use shared::{get_channel_id, initialize_logger, Chatroom};
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use tokio::runtime::Runtime;
 use url::Url;
+
+type BoxError = Box<dyn Error + Send + Sync>;
+type BoxResult<T> = Result<T, BoxError>;
 
 #[derive(Debug, Deserialize)]
 struct ChatroomQuery {
@@ -41,13 +44,13 @@ async fn get_chatrooms(Query(query): Query<ChatroomQuery>) -> Json<Vec<Chatroom>
     let mut chatrooms = Vec::new();
 
     for Location { url, terms } in instances {
-        let response: Result<HashMap<String, (u32, u32)>, Box<dyn Error>> = try {
+        let response: BoxResult<HashMap<String, (i32, u32)>> = try {
             client
                 .post(url.join("chatrooms")?)
                 .json(&terms)
                 .send()
                 .await?
-                .json::<HashMap<String, (u32, u32)>>()
+                .json::<HashMap<String, (i32, u32)>>()
                 .await?
         };
 
@@ -94,7 +97,7 @@ fn locate_instances(urls: &Vec<Url>, terms: &[&str]) -> Vec<Location> {
     instances
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> BoxResult<()> {
     initialize_logger()?;
 
     let runtime = Runtime::new()?;

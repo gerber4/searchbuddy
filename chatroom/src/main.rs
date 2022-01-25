@@ -2,13 +2,13 @@
 
 // This is a basic implementation for a server that can handle an arbitrary number of chatrooms.
 // All chatrooms are assigned a unique id by external services and the associated chatroom is
-// allocated when the first client connects to the server. All messages are saved until midnight.
-// At midnight a bulk job deletes all existing messages.
+// allocated when the first client connects to the server.
 
 mod chatroom;
 mod model;
 
 use crate::chatroom::{Chatroom, ClientToServerEvent};
+use crate::model::Model;
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     response::IntoResponse,
@@ -16,8 +16,8 @@ use axum::{
     Json, Router,
 };
 use futures::StreamExt;
-use log::error;
-use shared::{get_channel_id, ClientToServerMessage, initialize_logger};
+use log::{error, info};
+use shared::{get_channel_id, initialize_logger, ClientToServerMessage};
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
@@ -25,18 +25,24 @@ use tokio::runtime::Runtime;
 use tokio::spawn;
 use tokio::sync::RwLock;
 
+type BoxError = Box<dyn Error + Send + Sync>;
+type BoxResult<T> = Result<T, BoxError>;
+
 struct State {
-    chatrooms: HashMap<u32, Arc<Chatroom>>,
+    model: Arc<Model>,
+    chatrooms: HashMap<i32, Arc<Chatroom>>,
 }
 
 impl State {
-    async fn get_channel(&mut self, chatroom_id: u32) -> Arc<Chatroom> {
+    async fn get_channel(&mut self, chatroom_id: i32) -> Arc<Chatroom> {
         let chatroom = self.chatrooms.get_mut(&chatroom_id);
 
         if let Some(chatroom) = chatroom {
             chatroom.clone()
         } else {
-            Chatroom::new(chatroom_id)
+            info!("New channel requested.");
+
+            Chatroom::new(self.model.clone(), chatroom_id)
         }
     }
 }
@@ -44,7 +50,7 @@ impl State {
 async fn chatrooms_handler(
     state: Arc<RwLock<State>>,
     Json(terms): Json<Vec<String>>,
-) -> Json<HashMap<String, (u32, u32)>> {
+) -> Json<HashMap<String, (i32, u32)>> {
     let mut counts = HashMap::new();
 
     for term in terms {
@@ -74,7 +80,9 @@ async fn handle_socket_messages(state: Arc<RwLock<State>>, socket: WebSocket) {
     let (sink, mut stream) = socket.split();
 
     // Generate unique id for this connection.
-    let user_id = rand::random::<u32>();
+    let user_id = rand::random::<i32>();
+
+    info!("New websocket connection with id {}.", user_id);
 
     spawn(async move {
         if let Some(Ok(message)) = stream.next().await {
@@ -90,10 +98,14 @@ async fn handle_socket_messages(state: Arc<RwLock<State>>, socket: WebSocket) {
                     connection: sink,
                 });
 
+                info!("User {} joined a server.", user_id);
+
                 while let Some(Ok(message)) = stream.next().await {
                     let message = parse_message(message);
 
                     if let Some(message) = message {
+                        info!("Message received from user {} - {:?}", user_id, message);
+
                         match message {
                             ClientToServerMessage::Join { .. } => {
                                 // Joining is unsupported once in a chatroom.
@@ -101,14 +113,8 @@ async fn handle_socket_messages(state: Arc<RwLock<State>>, socket: WebSocket) {
                             ClientToServerMessage::NewMessage(chat) => {
                                 chatroom.send_event(ClientToServerEvent::NewMessage(chat));
                             }
-                            ClientToServerMessage::RangeRequest {
-                                limit: start_timestamp,
-                                offset: end_timestamp,
-                            } => {
-                                chatroom.send_event(ClientToServerEvent::RangeRequest {
-                                    limit: start_timestamp,
-                                    offset: end_timestamp,
-                                });
+                            ClientToServerMessage::ChatsFromTodayRequest => {
+                                chatroom.send_event(ClientToServerEvent::ChatsFromTodayRequest);
                             }
                         }
                     }
@@ -123,12 +129,16 @@ async fn handle_socket_messages(state: Arc<RwLock<State>>, socket: WebSocket) {
     });
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> BoxResult<()> {
     initialize_logger()?;
-
     let runtime = Runtime::new()?;
+    runtime.block_on(async_main())?;
+    Ok(())
+}
 
+async fn async_main() -> BoxResult<()> {
     let chatrooms = Arc::new(RwLock::new(State {
+        model: Arc::new(Model::new().await?),
         chatrooms: HashMap::new(),
     }));
 
@@ -142,12 +152,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             post(move |terms| chatrooms_handler(chatrooms_state, terms)),
         );
 
-    runtime.block_on(async {
-        axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
-            .serve(app.into_make_service())
-            .await
-            .unwrap();
-    });
+    axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
+        .serve(app.into_make_service())
+        .await
+        .unwrap();
 
     Ok(())
 }
