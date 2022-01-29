@@ -98,10 +98,13 @@ async fn handle_socket_messages(state: Arc<RwLock<State>>, socket: WebSocket) {
                     state.get_channel(channel_id).await
                 };
 
-                chatroom.send_event(ClientToServerEvent::Connect {
+                chatroom.send_event(
                     user_id,
-                    connection: sink,
-                });
+                    ClientToServerEvent::Connect {
+                        user_id,
+                        connection: sink,
+                    },
+                );
 
                 info!("User {} joined a server.", user_id);
 
@@ -116,15 +119,19 @@ async fn handle_socket_messages(state: Arc<RwLock<State>>, socket: WebSocket) {
                                 // Joining is unsupported once in a chatroom.
                             }
                             ClientToServerMessage::NewMessage { content } => {
-                                chatroom.send_event(ClientToServerEvent::NewMessage(content));
+                                chatroom
+                                    .send_event(user_id, ClientToServerEvent::NewMessage(content));
                             }
                             ClientToServerMessage::ChatsFromTodayRequest => {
-                                chatroom.send_event(ClientToServerEvent::ChatsFromTodayRequest);
+                                chatroom.send_event(
+                                    user_id,
+                                    ClientToServerEvent::ChatsFromTodayRequest,
+                                );
                             }
                         }
                     }
                 }
-                chatroom.send_event(ClientToServerEvent::Disconnect { user_id });
+                chatroom.send_event(user_id, ClientToServerEvent::Disconnect { user_id });
             } else {
                 error!("Expected a join message from new client.");
             }

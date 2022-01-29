@@ -24,13 +24,13 @@ pub enum ClientToServerEvent {
 
 pub struct Chatroom {
     chatroom_id: i32,
-    channel: UnboundedSender<ClientToServerEvent>,
+    channel: UnboundedSender<(i32, ClientToServerEvent)>,
     count: AtomicU32,
 }
 
 impl Chatroom {
     pub fn new(model: Arc<Model>, chatroom_id: i32) -> Arc<Chatroom> {
-        let (sender, receiver) = unbounded_channel::<ClientToServerEvent>();
+        let (sender, receiver) = unbounded_channel::<(i32, ClientToServerEvent)>();
 
         let chatroom = Chatroom {
             chatroom_id,
@@ -47,8 +47,8 @@ impl Chatroom {
         self.count.load(Ordering::SeqCst)
     }
 
-    pub fn send_event(&self, event: ClientToServerEvent) {
-        let result = self.channel.send(event);
+    pub fn send_event(&self, user_id: i32, event: ClientToServerEvent) {
+        let result = self.channel.send((user_id, event));
 
         if let Err(error) = result {
             error!(
@@ -61,7 +61,7 @@ impl Chatroom {
     async fn handle_events(
         model: Arc<Model>,
         chatroom: Arc<Chatroom>,
-        mut receiver: UnboundedReceiver<ClientToServerEvent>,
+        mut receiver: UnboundedReceiver<(i32, ClientToServerEvent)>,
     ) {
         info!(
             "Started task to handle events for channel {}.",
@@ -71,7 +71,7 @@ impl Chatroom {
         let mut connections: HashMap<i32, SplitSink<WebSocket, Message>> = HashMap::new();
 
         loop {
-            while let Some(event) = receiver.recv().await {
+            while let Some((user_id, event)) = receiver.recv().await {
                 match event {
                     ClientToServerEvent::NewMessage(chat) => {
                         let result = model.insert_chat(chatroom.chatroom_id, &chat).await;
@@ -90,7 +90,7 @@ impl Chatroom {
                             Ok(messages) => {
                                 let message =
                                     ServerToClientMessage::ChatsFromTodayResponse { messages };
-                                Self::broadcast_message(&mut connections, message).await;
+                                Self::send_message(&mut connections, user_id, message).await;
                             }
                             Err(error) => {
                                 error!("Failed to fetch chats from database - {:?}", error);
