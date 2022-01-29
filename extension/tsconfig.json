@@ -1,0 +1,23 @@
+{
+  "include": [
+    "src"
+  ],
+  "env": {
+    "browser": true,
+    "es6": true,
+  },
+  "compilerOptions": {
+    "module": "es6",
+    "target": "es6",
+    "moduleResolution": "node",
+    "jsx": "react",
+    "baseUrl": "./",
+    "noEmit": false,
+    "strict": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "importsNotUsedAsValues": "error"
+  }
+}

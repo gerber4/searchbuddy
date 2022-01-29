@@ -42,7 +42,9 @@ impl State {
         } else {
             info!("New channel requested.");
 
-            Chatroom::new(self.model.clone(), chatroom_id)
+            let chatroom = Chatroom::new(self.model.clone(), chatroom_id);
+            self.chatrooms.insert(chatroom_id, chatroom.clone());
+            chatroom
         }
     }
 }
@@ -87,7 +89,10 @@ async fn handle_socket_messages(state: Arc<RwLock<State>>, socket: WebSocket) {
     spawn(async move {
         if let Some(Ok(message)) = stream.next().await {
             let message = parse_message(message);
-            if let Some(ClientToServerMessage::Join { channel_id }) = message {
+            if let Some(ClientToServerMessage::Join {
+                chatroom_id: channel_id,
+            }) = message
+            {
                 let chatroom = {
                     let mut state = state.write().await;
                     state.get_channel(channel_id).await
@@ -110,8 +115,8 @@ async fn handle_socket_messages(state: Arc<RwLock<State>>, socket: WebSocket) {
                             ClientToServerMessage::Join { .. } => {
                                 // Joining is unsupported once in a chatroom.
                             }
-                            ClientToServerMessage::NewMessage(chat) => {
-                                chatroom.send_event(ClientToServerEvent::NewMessage(chat));
+                            ClientToServerMessage::NewMessage { content } => {
+                                chatroom.send_event(ClientToServerEvent::NewMessage(content));
                             }
                             ClientToServerMessage::ChatsFromTodayRequest => {
                                 chatroom.send_event(ClientToServerEvent::ChatsFromTodayRequest);
@@ -131,6 +136,7 @@ async fn handle_socket_messages(state: Arc<RwLock<State>>, socket: WebSocket) {
 
 fn main() -> BoxResult<()> {
     initialize_logger()?;
+
     let runtime = Runtime::new()?;
     runtime.block_on(async_main())?;
     Ok(())

@@ -200,7 +200,7 @@ async fn update(model: &mut Model, event: Event) {
                         let (mut send, receive) = socket.split();
 
                         let message = serde_json::to_string(&ClientToServerMessage::Join {
-                            channel_id: chatroom.chatroom_id,
+                            chatroom_id: chatroom.chatroom_id,
                         })?;
                         send.send(WsMessage::Text(message)).await?;
 
@@ -242,9 +242,9 @@ async fn update(model: &mut Model, event: Event) {
                 }
                 KeyCode::Enter => {
                     if !input.is_empty() {
-                        let message = serde_json::to_string(&ClientToServerMessage::NewMessage(
-                            input.clone(),
-                        ))
+                        let message = serde_json::to_string(&ClientToServerMessage::NewMessage {
+                            content: input.clone(),
+                        })
                         .unwrap();
                         let result = sink.send(WsMessage::Text(message)).await;
                         match result {
@@ -324,8 +324,8 @@ async fn handle_messages(
                             ServerToClientMessage::UserDisconnected { user_id } => {
                                 channel.send(Event::UserDisconnected { user_id })?;
                             }
-                            ServerToClientMessage::NewMessage(chat) => {
-                                channel.send(Event::NewMessage(chat))?;
+                            ServerToClientMessage::NewMessage { content } => {
+                                channel.send(Event::NewMessage(content))?;
                             }
                             ServerToClientMessage::ChatsFromTodayResponse { messages } => {
                                 channel.send(Event::ChatsFromTodayResponse { messages })?;

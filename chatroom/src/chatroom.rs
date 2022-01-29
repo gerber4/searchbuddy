@@ -80,7 +80,7 @@ impl Chatroom {
                             error!("Failed to insert chat to database - {:?}", error);
                         }
 
-                        let message = ServerToClientMessage::NewMessage(chat);
+                        let message = ServerToClientMessage::NewMessage { content: chat };
                         Self::broadcast_message(&mut connections, message).await;
                     }
 

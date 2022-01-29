@@ -13,18 +13,20 @@ use std::error::Error;
 use std::io::Cursor;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "type")]
 pub enum ClientToServerMessage {
-    Join { channel_id: i32 },
-    NewMessage(String),
+    Join { chatroom_id: i32 },
+    NewMessage { content: String },
     ChatsFromTodayRequest,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "type")]
 pub enum ServerToClientMessage {
     Joined { chatroom_id: i32 },
     NewUser { user_id: i32 },
     UserDisconnected { user_id: i32 },
-    NewMessage(String),
+    NewMessage { content: String },
     ChatsFromTodayResponse { messages: Vec<String> },
 }
 
@@ -63,4 +65,17 @@ pub fn initialize_logger() -> Result<(), Box<dyn Error + Send + Sync>> {
     log4rs::init_config(config)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ClientToServerMessage;
+
+    #[test]
+    fn serialize_and_deserialize() {
+        let message = ClientToServerMessage::Join {chatroom_id: 6969};
+        let serialized = serde_json::to_string(&message).unwrap();
+        assert_eq!(serialized, r#"{"type":"Join","chatroom_id":6969}"#);
+        let _deserialize: ClientToServerMessage = serde_json::from_str(&serialized).unwrap();
+    }
 }

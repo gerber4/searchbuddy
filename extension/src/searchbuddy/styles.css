@@ -1,0 +1,32 @@
+.mainContainer {
+    display: flex;
+    justify-content: center;
+}
+
+.mainColumn {
+    align-items: center;
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 100px);
+    min-width: 850px;
+}
+
+.messages {
+    flex-grow: 1;
+    overflow: auto;
+    width: 100%;
+}
+
+.inputs {
+    display: flex;
+    flex-direction: row;
+    width: 100%;
+}
+
+.inputs_text {
+    flex-grow: 1;
+}
+
+.imageView__buttons {
+    display: flex;
+}
