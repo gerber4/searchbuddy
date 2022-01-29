@@ -21,7 +21,9 @@ has linear scalability. The main service is designed to lookup chatroom instance
 constant time. As a result, searchbuddy can scale up to handle Google levels of
 searches.
 
-<img alt="Screenshot"  src="party.gif"/>
+<p align="center">
+  <img alt="Screenshot"  src="party.gif"/>
+</p>
 
 ## Future Plans
 
