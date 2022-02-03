@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::io::Cursor;
 
+pub mod discovery;
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type")]
 pub enum ClientToServerMessage {
@@ -73,7 +75,7 @@ mod tests {
 
     #[test]
     fn serialize_and_deserialize() {
-        let message = ClientToServerMessage::Join {chatroom_id: 6969};
+        let message = ClientToServerMessage::Join { chatroom_id: 6969 };
         let serialized = serde_json::to_string(&message).unwrap();
         assert_eq!(serialized, r#"{"type":"Join","chatroom_id":6969}"#);
         let _deserialize: ClientToServerMessage = serde_json::from_str(&serialized).unwrap();

@@ -1,3 +1,4 @@
+.env
 .idea
 target
 Cargo.lock

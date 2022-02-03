@@ -17,10 +17,15 @@ use axum::{
 };
 use futures::StreamExt;
 use log::{error, info};
+use shared::discovery::{PingRequest, PingResponse, PingResult, RegisterRequest, RegisterResponse};
 use shared::{get_channel_id, initialize_logger, ClientToServerMessage};
 use std::collections::HashMap;
+use std::env;
 use std::error::Error;
+use std::net::SocketAddrV4;
+use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::runtime::Runtime;
 use tokio::spawn;
 use tokio::sync::RwLock;
@@ -143,6 +148,7 @@ async fn handle_socket_messages(state: Arc<RwLock<State>>, socket: WebSocket) {
 
 fn main() -> BoxResult<()> {
     initialize_logger()?;
+    dotenv::dotenv().ok();
 
     let runtime = Runtime::new()?;
     runtime.block_on(async_main())?;
@@ -164,6 +170,57 @@ async fn async_main() -> BoxResult<()> {
             "/chatrooms",
             post(move |terms| chatrooms_handler(chatrooms_state, terms)),
         );
+
+    tokio::spawn(async {
+        let address = env::var("ADDRESS").expect("ADDRESS not defined.");
+        let address =
+            SocketAddrV4::from_str(&address).expect("ADDRESS is not valid socket address");
+
+        let client = reqwest::Client::new();
+        let registration = client
+            // .post("http://localhost:8081/register")
+            .post("http://discovery.gerber.website:8081/register")
+            .json(&RegisterRequest { address })
+            .send()
+            .await
+            .expect("Failed to contact discovery service.")
+            .json::<RegisterResponse>()
+            .await
+            .expect("Invalid response from discovery service.");
+
+        loop {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+
+            let response: BoxResult<PingResponse> = try {
+                client
+                    // .post("http://localhost:8081/ping")
+                    .post("http://discovery.gerber.website:8081/ping")
+                    .json(&PingRequest {
+                        address,
+                        instance_id: registration.instance_id,
+                    })
+                    .send()
+                    .await?
+                    .json::<PingResponse>()
+                    .await?
+            };
+
+            match response {
+                Ok(response) => {
+                    if let PingResult::NoLongerActive = response.ping_result {
+                        error!("Registration expired. Exiting.");
+                        std::process::exit(-1);
+                    }
+                }
+                Err(error) => {
+                    error!(
+                        "The discovery service could not be reached because of an error - {:?}",
+                        error
+                    );
+                }
+            }
+        }
+    });
 
     axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
         .serve(app.into_make_service())

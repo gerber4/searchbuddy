@@ -17,8 +17,5 @@ of the chatroom service. This service will provide an API that will allow for
 the even distribution of active conversations across the cluster of 
 chatroom instances.
 
-To simplify the initial implementation the set of chatroom instances will
-be fixed.
-
 ### Chatroom Service
 The purpose of this service is to manage the events and state of a chatroom.

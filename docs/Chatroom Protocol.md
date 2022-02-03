@@ -6,9 +6,9 @@ Server -> Client
 - NEW_MESSAGE {idempotency, text, timestamp, user}
 - NEW_USER {timestamp, user}
 - USER_DISCONNECT {user}
-- RANGE_RESPONSE {messages[]}
+- CHATS_FROM_TODAY_RESPONSE {messages[]}
 
 Client -> Server
 - NEW_MESSAGE {idempotency, text}
-- RANGE_REQUEST {start_timestamp?, end_timestamp?}
+- CHATS_FROM_TODAY_REQUEST
 - DISCONNECT
