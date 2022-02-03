@@ -2,7 +2,7 @@
     "manifest_version": 2,
     "name": "searchbuddy",
     "description": "Make friends while searching.",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "browser_action": {
         "default_icon": "logo-128.png",
         "default_title": "searchbuddy"

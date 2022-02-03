@@ -10,9 +10,9 @@ export const Initial: React.FC<{
         let terms = params.get("terms");
 
         if (terms == null) {
-            throw new Error(
-                "Cannot start searchbuddy without any search terms.",
-            );
+            terms = "searchbuddy"
+        } else {
+            terms = terms + " searchbuddy"
         }
 
         // let url = `http://localhost:8080/chatrooms?search=${terms}`;
