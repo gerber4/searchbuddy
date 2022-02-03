@@ -31,10 +31,5 @@ searches.
 Currently, searchbuddy is completely anonymous. In the future, I would like to implement
 user accounts and authentication.
 
-### Better system handling chatrooms instances joining and leaving the cluster.
-Currently, the list of chatroom instances is fixed. In the future, I would like to
-implement a service for registering and location instances. This will make scaling
-simpler.
-
 ## License
 Licensed under the MIT license.
