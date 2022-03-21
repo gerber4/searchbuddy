@@ -104,6 +104,7 @@ async fn locate_instances(terms: &[&str]) -> HashMap<SocketAddrV4, Vec<String>> 
 
 fn main() -> BoxResult<()> {
     initialize_logger()?;
+    dotenv::dotenv().ok();
 
     let runtime = Runtime::new()?;
 

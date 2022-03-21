@@ -1,97 +1,63 @@
 use crate::BoxResult;
 use chrono::Local;
-use log::error;
-use scylla::{IntoTypedRows, Session, SessionBuilder};
+use futures::StreamExt;
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{Pool, Postgres, Row};
 use std::env;
 
 pub struct Model {
-    session: Session,
+    pool: Pool<Postgres>,
 }
 
 impl Model {
     pub async fn new() -> BoxResult<Self> {
-        let scylla_urls = env::var("SCYLLA_URL")?;
-        let scylla_urls: Vec<&str> = scylla_urls.split_whitespace().collect();
-
-        // Generate all tables in the database.
-        let session = SessionBuilder::new()
-            .known_nodes(&scylla_urls)
-            .build()
+        let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not defined.");
+        let database_url = database_url.trim();
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect(database_url)
             .await?;
 
-        session
-            .query(
-                r#"
-                CREATE KEYSPACE IF NOT EXISTS searchbuddy
-                WITH REPLICATION = {
-                    'class': 'SimpleStrategy',
-                    'replication_factor': 1
-                };
-                "#,
-                (),
-            )
-            .await?;
-
-        session.use_keyspace("searchbuddy", false).await?;
-
-        session
-            .query(
-                r#"
-                CREATE TABLE IF NOT EXISTS chat (
-                    chatroom_id int,
-                    ts timestamp,
-                    content text,
-                    PRIMARY KEY(chatroom_id, ts),
-                );
-                "#,
-                (),
-            )
-            .await?;
-
-        Ok(Model { session })
+        Ok(Model { pool })
     }
 
     pub async fn insert_chat(&self, chatroom_id: i32, content: &str) -> BoxResult<()> {
+        let mut conn = self.pool.acquire().await?;
+
         let now = Local::now();
 
-        self.session
-            .query(
-                r#"
-                INSERT INTO chat (chatroom_id, ts, content)
-                VALUES (?, ?, ?);
-                "#,
-                (&chatroom_id, now.timestamp_millis(), content),
-            )
-            .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO chat (chatroom_id, ts, content)
+            VALUES ($1, $2, $3)
+            "#,
+        )
+        .bind(chatroom_id as i64)
+        .bind(&now)
+        .bind(content)
+        .execute(&mut conn)
+        .await?;
 
         Ok(())
     }
 
     pub async fn get_chats_from_today(&self, chatroom_id: i32) -> BoxResult<Vec<String>> {
+        let mut conn = self.pool.acquire().await?;
+
         let now = Local::now();
         let date = now.date().and_hms(0, 0, 0);
 
-        let rows = self
-            .session
-            .query(
-                r#"SELECT content FROM chat WHERE chatroom_id = ? AND ts > ?"#,
-                (&chatroom_id, date.timestamp_millis()),
-            )
-            .await?
-            .rows
-            .expect("Expected row response.")
-            .into_typed::<(String,)>();
+        let mut chats_stream =
+            sqlx::query("SELECT content FROM chat WHERE chatroom_id = $1 AND ts > $2")
+                .bind(chatroom_id as i64)
+                .bind(&date)
+                .fetch(&mut conn);
 
-        let mut chats = Vec::new();
+        let mut chats: Vec<String> = Vec::new();
 
-        for row in rows {
-            match row {
-                Ok((content,)) => {
-                    chats.push(content);
-                }
-                Err(error) => {
-                    error!("Invalid row in data found - {:?}", error);
-                }
+        while let Some(chat) = chats_stream.next().await {
+            if let Ok(chat) = chat {
+                chats.push(chat.get(0))
             }
         }
 

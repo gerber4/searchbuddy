@@ -156,6 +156,12 @@ fn main() -> BoxResult<()> {
 }
 
 async fn async_main() -> BoxResult<()> {
+    let listen_address = env::var("LISTEN_ADDRESS").expect("LISTEN_ADDRESS not defined.");
+    let listen_address = SocketAddrV4::from_str(&listen_address)
+        .expect("LISTEN_ADDRESS is not valid socket address");
+
+    let discovery_address = env::var("DISCOVERY_ADDRESS").expect("DISCOVERY_ADDRESS not defined.");
+
     let chatrooms = Arc::new(RwLock::new(State {
         model: Arc::new(Model::new().await?),
         chatrooms: HashMap::new(),
@@ -171,33 +177,30 @@ async fn async_main() -> BoxResult<()> {
             post(move |terms| chatrooms_handler(chatrooms_state, terms)),
         );
 
-    tokio::spawn(async {
-        let address = env::var("ADDRESS").expect("ADDRESS not defined.");
-        let address =
-            SocketAddrV4::from_str(&address).expect("ADDRESS is not valid socket address");
+    let client = reqwest::Client::new();
+    let registration = client
+        .post(discovery_address.clone() + "/register")
+        .json(&RegisterRequest { listen_address })
+        .send()
+        .await
+        .expect("Failed to contact discovery service.")
+        .json::<RegisterResponse>()
+        .await
+        .expect("Invalid response from discovery service.");
 
-        let client = reqwest::Client::new();
-        let registration = client
-            // .post("http://localhost:8081/register")
-            .post("http://discovery.gerber.website:8081/register")
-            .json(&RegisterRequest { address })
-            .send()
-            .await
-            .expect("Failed to contact discovery service.")
-            .json::<RegisterResponse>()
-            .await
-            .expect("Invalid response from discovery service.");
+    let instance_id = registration.instance_id;
 
+    tokio::spawn(async move {
+        // Continuously ping the discovery to let it know this instance is active.
         loop {
             tokio::time::sleep(Duration::from_secs(2)).await;
 
             let response: BoxResult<PingResponse> = try {
                 client
-                    // .post("http://localhost:8081/ping")
-                    .post("http://discovery.gerber.website:8081/ping")
+                    .post(discovery_address.clone() + "/ping")
                     .json(&PingRequest {
-                        address,
-                        instance_id: registration.instance_id,
+                        listen_address,
+                        instance_id,
                     })
                     .send()
                     .await?
@@ -222,7 +225,7 @@ async fn async_main() -> BoxResult<()> {
         }
     });
 
-    axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
+    axum::Server::bind(&listen_address.into())
         .serve(app.into_make_service())
         .await
         .unwrap();

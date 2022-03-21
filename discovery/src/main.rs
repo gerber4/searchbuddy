@@ -1,3 +1,5 @@
+#![feature(let_chains)]
+
 use crate::model::Model;
 use axum::extract::Extension;
 use axum::http::StatusCode;
@@ -23,7 +25,7 @@ async fn register(
     Extension(state): Extension<Arc<State>>,
     Json(payload): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, StatusCode> {
-    let instance_id = state.model.register_instance(&payload.address).await;
+    let instance_id = state.model.register_instance(&payload.listen_address).await;
 
     match instance_id {
         Ok(instance_id) => Ok(Json::from(RegisterResponse { instance_id })),
@@ -43,7 +45,7 @@ async fn ping(
 ) -> Result<Json<PingResponse>, StatusCode> {
     let result = state
         .model
-        .ping_instance(&payload.address, payload.instance_id)
+        .ping_instance(&payload.listen_address, payload.instance_id)
         .await;
 
     match result {

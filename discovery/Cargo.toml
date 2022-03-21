@@ -16,9 +16,9 @@ futures = "0.3.19"
 log = "0.4"
 log4rs = "1.0.0"
 rand = "0.8.4"
-scylla = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 shared = { path = "../shared"}
+sqlx = { version = "0.5.11", features = ["postgres", "all-types", "runtime-tokio-rustls"] }
 tokio = { version = "1.15.0", features = ["full"] }
 url = "2.2.2"

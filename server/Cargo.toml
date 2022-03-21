@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 axum = "0.4.4"
 axum-server = "0.3.3"
+dotenv = "0.15.0"
 env_logger = "0.9"
 futures = "0.3.19"
 hyper = { version = "0.14.16", features = ["full"] }

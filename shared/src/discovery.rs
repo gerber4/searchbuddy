@@ -9,7 +9,7 @@ pub struct Instance {
 
 #[derive(Copy, Clone, Deserialize, Serialize)]
 pub struct RegisterRequest {
-    pub address: SocketAddrV4,
+    pub listen_address: SocketAddrV4,
 }
 
 #[derive(Copy, Clone, Deserialize, Serialize)]
@@ -25,7 +25,7 @@ pub enum PingResult {
 
 #[derive(Copy, Clone, Deserialize, Serialize)]
 pub struct PingRequest {
-    pub address: SocketAddrV4,
+    pub listen_address: SocketAddrV4,
     pub instance_id: i32,
 }
 
